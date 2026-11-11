@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>A Festa Pixelada da Luiza Lise</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;700&family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;height:100%;background:#120a24;overflow:hidden;touch-action:none;font-family:Fredoka,system-ui,sans-serif;color:#fff;-webkit-user-select:none;user-select:none}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  canvas{display:block}
+  .overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;background:rgba(18,10,36,.9);padding:20px;gap:14px;box-sizing:border-box}
+  .overlay.win{background:linear-gradient(to top,rgba(18,10,36,.92) 0%,rgba(18,10,36,.6) 38%,rgba(18,10,36,0) 60%);justify-content:flex-end;padding-bottom:5vh}
+  .hidden{display:none}
+  h1{font-family:'Press Start 2P',monospace;font-size:clamp(15px,3.3vw,30px);line-height:1.5;margin:0;color:#ffd93d;text-shadow:3px 3px 0 #e8457a}
+  p{max-width:600px;font-size:clamp(14px,2.2vw,19px);line-height:1.45;margin:0}
+  .tips{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;max-width:720px}
+  .tip{background:#2b1d4f;border:2px solid #4a3585;border-radius:10px;padding:8px 12px;font-size:clamp(13px,1.9vw,16px);max-width:210px}
+  .tip b{display:block;color:#ffd93d;margin-bottom:2px}
+  button.big{font-family:'Press Start 2P',monospace;font-size:clamp(13px,2vw,17px);padding:16px 26px;border:0;border-radius:8px;background:#4cd964;color:#14301a;box-shadow:0 6px 0 #2a8a3c;cursor:pointer}
+  button.big:active{transform:translateY(4px);box-shadow:0 2px 0 #2a8a3c}
+  .small{opacity:.75;font-size:clamp(12px,1.7vw,15px)}
+  #mute{position:fixed;right:10px;bottom:10px;width:44px;height:44px;border-radius:50%;border:0;background:#2b1d4fcc;color:#fff;font-size:20px;cursor:pointer;z-index:5}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+
+<div id="start" class="overlay">
+  <h1>A FESTA PIXELADA<br>DA LUIZA LISE</h1>
+  <p>A festa virou um jogo maluco! As velas sumiram pelo salão. Encontre a vela <b>1</b> e a vela <b>2</b> e coloque as duas no bolo.</p>
+  <div class="tips">
+    <div class="tip"><b>Velas erradas</b>Tem velas de 0 a 9. Se pegar a errada, ela foge!</div>
+    <div class="tip"><b>Toons</b>Eles te empurram, e a vela que você estiver carregando cai.</div>
+    <div class="tip"><b>Sr. Confete</b>Quando a luz apagar, ele anda. Com a luz acesa, ele congela.</div>
+  </div>
+  <p class="small">Setas ou WASD no computador. No celular ou tablet, deite a tela e arraste o dedo.</p>
+  <button class="big" id="play">JOGAR</button>
+</div>
+
+<div id="win" class="overlay win hidden">
+  <h1>PARABÉNS, LUIZA LISE!</h1>
+  <p>Você montou o bolo! Feliz aniversário! 🎂</p>
+  <button class="big" id="again">JOGAR DE NOVO</button>
+</div>
+
+<button id="mute" aria-label="Som">🔊</button>
+
+<script>
+(() => {
+const W = 1000, H = 640;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let K = 1, viewScale = 1;
+
+function resize() {
+  const s = Math.min(innerWidth / W, innerHeight / H);
+  viewScale = s;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.style.width = W * s + 'px';
+  cv.style.height = H * s + 'px';
+  cv.width = Math.round(W * s * dpr);
+  cv.height = Math.round(H * s * dpr);
+  K = s * dpr;
+}
+addEventListener('resize', resize);
+resize();
+
+// ---------- helpers ----------
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+function ellipse(x, y, rx, ry) { ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); ctx.fill(); }
+function circle(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); }
+function rrect(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); ctx.fill(); }
+
+const FLOOR = { x0: 36, y0: 100, x1: 964, y1: 612 };
+const AREA = { x0: 62, y0: 140, x1: 938, y1: 598 };     // where feet can go
+const CAKE = { x: 500, y: 380, w: 240, h: 56 };         // ground footprint
+const CAKE_BASE = 400;
+const DIGIT_COL = ['#ff6b6b','#ffd93d','#4cd964','#5ad1ff','#c39bff','#ff9f43','#ff7eb6','#1dd1a1','#f368e0','#54a0ff'];
+
+function inCakeVisual(x, y) { return Math.abs(x - CAKE.x) < 160 && y > 200 && y < 440; }
+function clampArea(o) {
+  o.x = Math.max(AREA.x0, Math.min(AREA.x1, o.x));
+  o.y = Math.max(AREA.y0, Math.min(AREA.y1, o.y));
+}
+function pushOutCake(o) {
+  const hw = CAKE.w / 2 + o.r * 0.7, hh = CAKE.h / 2 + o.r * 0.7;
+  const dx = o.x - CAKE.x, dy = o.y - CAKE.y;
+  if (Math.abs(dx) < hw && Math.abs(dy) < hh) {
+    const ox = hw - Math.abs(dx), oy = hh - Math.abs(dy);
+    if (ox < oy) o.x = CAKE.x + Math.sign(dx || 1) * hw;
+    else o.y = CAKE.y + Math.sign(dy || 1) * hh;
+  }
+}
+function randomSpot(minFromPlayer) {
+  for (let i = 0; i < 300; i++) {
+    const x = rand(AREA.x0 + 20, AREA.x1 - 20), y = rand(AREA.y0 + 20, AREA.y1 - 10);
+    if (inCakeVisual(x, y)) continue;
+    if (player && Math.hypot(x - player.x, y - player.y) < (minFromPlayer || 0)) continue;
+    if (candles.some(c => Math.hypot(c.x - x, c.y - y) < 75)) continue;
+    return { x, y };
+  }
+  return { x: rand(100, 300), y: rand(160, 560) };
+}
+
+// ---------- audio ----------
+let ac = null, muted = false;
+function audioOn() {
+  if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ac = null; } }
+  if (ac && ac.state === 'suspended') ac.resume().catch(() => {});
+}
+function tone(f, d, type = 'square', v = 0.07, delay = 0, slide) {
+  if (!ac || muted) return;
+  const o = ac.createOscillator(), g = ac.createGain();
+  const t0 = ac.currentTime + delay;
+  o.type = type;
+  o.frequency.setValueAtTime(f, t0);
+  if (slide) o.frequency.exponentialRampToValueAtTime(slide, t0 + d);
+  g.gain.setValueAtTime(v, t0);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+  o.connect(g).connect(ac.destination);
+  o.start(t0); o.stop(t0 + d + 0.03);
+}
+function sfx(n) {
+  switch (n) {
+    case 'good': [523, 659, 784, 1046].forEach((f, i) => tone(f, 0.12, 'square', 0.06, i * 0.07)); break;
+    case 'bad': tone(240, 0.25, 'sawtooth', 0.05, 0, 110); tone(250, 0.22, 'square', 0.035, 0.06, 90); break;
+    case 'boing': tone(260, 0.3, 'sine', 0.12, 0, 720); break;
+    case 'scare': tone(95, 0.55, 'sawtooth', 0.11, 0, 40); tone(1300, 0.25, 'square', 0.04, 0, 280); break;
+    case 'place': tone(784, 0.1, 'triangle', 0.1); tone(1175, 0.2, 'triangle', 0.1, 0.08); break;
+    case 'flicker': for (let i = 0; i < 5; i++) tone(55, 0.05, 'square', 0.05, i * 0.13); break;
+    case 'lighton': tone(440, 0.08, 'triangle', 0.06); tone(660, 0.12, 'triangle', 0.06, 0.07); break;
+    case 'win': {
+      // "Parabéns" melody (public domain tune)
+      const n = [[392,.3],[392,.15],[440,.45],[392,.45],[523,.45],[494,.8],[392,.3],[392,.15],[440,.45],[392,.45],[587,.45],[523,.8]];
+      let tt = 0; for (const [f, d] of n) { tone(f, d * 0.95, 'triangle', 0.09, tt); tone(f / 2, d * 0.95, 'square', 0.025, tt); tt += d; }
+      break;
+    }
+  }
+}
+
+// ---------- state ----------
+let state = 'menu', t = 0;
+let player, candles = [], carrying, placed, toons, bot;
+let lightPhase, lightT, msgText = '', msgT = 0, shake = 0, glitch = 0, flash = 0, booT = 0, winT = 0, winShown = false;
+let particles = [];
+const floorDots = Array.from({ length: 70 }, () => ({ x: rand(FLOOR.x0, FLOOR.x1), y: rand(FLOOR.y0 + 10, FLOOR.y1), c: pick(DIGIT_COL), s: rand(2, 4) }));
+
+function say(text, dur = 3) { msgText = text; msgT = dur; }
+
+function reset() {
+  player = { x: 500, y: 540, r: 16, stun: 0, inv: 0, face: 1, walk: 0, kx: 0, ky: 0, moving: false };
+  candles = [];
+  carrying = null;
+  placed = { 1: false, 2: false };
+  for (let d = 0; d <= 9; d++) { const p = randomSpot(150); candles.push({ d, x: p.x, y: p.y, cool: 0, ph: Math.random() * 6, fly: 1 }); }
+  toons = [
+    { kind: 'estrela', col: '#ffd93d', dark: '#d9a400', x: 140, y: 170 },
+    { kind: 'cupcake', col: '#ff7eb6', dark: '#d94f8d', x: 860, y: 170 },
+    { kind: 'balao', col: '#5ad1ff', dark: '#2a9ccc', x: 870, y: 560 },
+  ].map(o => ({ ...o, r: 18, sp: rand(105, 125), wt: 0, tgt: null }));
+  bot = { x: 90, y: 580, r: 22, home: { x: 90, y: 580 }, moving: false };
+  lightPhase = 'on'; lightT = rand(8, 11);
+  shake = glitch = flash = booT = winT = 0; winShown = false;
+  particles = [];
+  say('Oi, Luiza! Ache as velas 1 e 2 e coloque no bolo!', 4);
+}
+
+// ---------- input ----------
+const keys = {};
+addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
+  audioOn();
+});
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+let joy = null;
+function toLogical(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+cv.addEventListener('pointerdown', e => {
+  audioOn();
+  const p = toLogical(e);
+  joy = { id: e.pointerId, sx: p.x, sy: p.y, x: p.x, y: p.y };
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+});
+cv.addEventListener('pointermove', e => { if (joy && e.pointerId === joy.id) { const p = toLogical(e); joy.x = p.x; joy.y = p.y; } });
+const endJoy = e => { if (joy && e.pointerId === joy.id) joy = null; };
+cv.addEventListener('pointerup', endJoy);
+cv.addEventListener('pointercancel', endJoy);
+function joyRadius() { return Math.min(140, 55 / viewScale); }
+function readInput() {
+  let x = 0, y = 0;
+  if (keys.arrowleft || keys.a) x--;
+  if (keys.arrowright || keys.d) x++;
+  if (keys.arrowup || keys.w) y--;
+  if (keys.arrowdown || keys.s) y++;
+  if (joy) {
+    const dx = joy.x - joy.sx, dy = joy.y - joy.sy, m = Math.hypot(dx, dy), R = joyRadius();
+    if (m > R * 0.15) { const k = Math.min(1, m / R); x = dx / m * k; y = dy / m * k; }
+  }
+  const m = Math.hypot(x, y);
+  if (m > 1) { x /= m; y /= m; }
+  return { x, y };
+}
+
+// ---------- particles ----------
+function burst(x, y, cols, n = 18, power = 220) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = rand(power * 0.3, power);
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 80, life: rand(0.5, 1), max: 1, col: pick(cols), size: rand(3, 6), grav: 400 });
+  }
+}
+function confettiRain() {
+  for (let i = 0; i < 4; i++) particles.push({ x: rand(0, W), y: 60, vx: rand(-40, 40), vy: rand(60, 160), life: 3, max: 3, col: pick(DIGIT_COL), size: rand(4, 7), grav: 40, spin: rand(0, 6) });
+}
+
+// ---------- game logic ----------
+function hitPlayer(src, kind) {
+  const p = player;
+  const a = Math.atan2(p.y - src.y, p.x - src.x);
+  const f = kind === 'bot' ? 720 : 430;
+  p.kx = Math.cos(a) * f; p.ky = Math.sin(a) * f;
+  p.stun = kind === 'bot' ? 1.3 : 0.9;
+  p.inv = kind === 'bot' ? 2.6 : 1.8;
+  if (carrying != null) {
+    const d = carrying, from = { x: p.x, y: p.y - 30 };
+    const sp = randomSpot(220);
+    candles.push({ d, x: sp.x, y: sp.y, cool: 0.9, ph: 0, fly: 0, from });
+    carrying = null;
+    say(kind === 'bot' ? `BUUU! O Sr. Confete te assustou e a vela ${d} voou longe!` : `Um toon esbarrou em você! A vela ${d} caiu!`, 3.2);
+  } else {
+    say(kind === 'bot' ? 'BUUU! Cuidado com o Sr. Confete no escuro!' : pick(['Ei! Os toons querem brincar com você!', 'Opa! Um toon te deu um esbarrão!', 'Os toons estão bagunçando a festa!']), 2.6);
+  }
+  if (kind === 'bot') {
+    shake = 0.6; flash = 0.35; booT = 0.8; sfx('scare');
+    bot.x = bot.home.x; bot.y = bot.home.y; glitch = 0.3;
+    lightPhase = 'on'; lightT = rand(9, 12);
+  } else {
+    shake = 0.25; sfx('boing');
+  }
+  burst(p.x, p.y - 40, ['#fff', '#ffd93d'], 10, 160);
+}
+
+function updateGame(dt) {
+  const p = player;
+
+  // lights cycle (FNAF vibe)
+  lightT -= dt;
+  if (lightPhase === 'on' && lightT <= 0) { lightPhase = 'flicker'; lightT = 1.4; sfx('flicker'); say('As luzes estão piscando...', 1.6); }
+  else if (lightPhase === 'flicker' && lightT <= 0) { lightPhase = 'off'; lightT = 3.6; say('Apagou! O Sr. Confete só anda no escuro... corre!', 3.6); }
+  else if (lightPhase === 'off' && lightT <= 0) { lightPhase = 'on'; lightT = rand(9, 13); sfx('lighton'); say('Ufa, a luz voltou! O Sr. Confete congelou.', 2.4); }
+
+  // player
+  p.inv = Math.max(0, p.inv - dt);
+  let mx = 0, my = 0;
+  if (p.stun > 0) p.stun -= dt;
+  else { const iv = readInput(); mx = iv.x; my = iv.y; }
+  const spd = 215;
+  p.x += (mx * spd + p.kx) * dt;
+  p.y += (my * spd + p.ky) * dt;
+  const damp = Math.pow(0.015, dt); p.kx *= damp; p.ky *= damp;
+  p.moving = !!(mx || my);
+  if (p.moving) { p.walk += dt * 12; if (Math.abs(mx) > 0.2) p.face = Math.sign(mx); }
+  clampArea(p); pushOutCake(p);
+
+  // candles
+  for (let i = 0; i < candles.length; i++) {
+    const c = candles[i];
+    c.cool = Math.max(0, c.cool - dt);
+    if (c.fly < 1) { c.fly = Math.min(1, c.fly + dt * 1.5); continue; }
+    if (carrying == null && p.stun <= 0 && c.cool <= 0 && Math.hypot(c.x - p.x, c.y - p.y) < 36) {
+      if ((c.d === 1 || c.d === 2) && !placed[c.d]) {
+        carrying = c.d;
+        candles.splice(i, 1);
+        say(`Você pegou a vela ${c.d}! Leve até o bolo!`, 3);
+        sfx('good');
+        burst(p.x, p.y - 40, ['#ffd93d', '#fff', DIGIT_COL[c.d]]);
+      } else {
+        const sp = randomSpot(170);
+        c.from = { x: c.x, y: c.y - 20 }; c.fly = 0; c.x = sp.x; c.y = sp.y; c.cool = 1.2;
+        glitch = 0.45; sfx('bad');
+        say(pick([`Hmm... essa é a vela ${c.d}. Não é essa!`, `Vela ${c.d}? Errou! Procure o 1 e o 2!`, `GL1TCH! A vela ${c.d} fugiu!`]), 2.8);
+      }
+      break;
+    }
+  }
+
+  // place on cake
+  if (carrying != null && Math.abs(p.x - CAKE.x) < CAKE.w / 2 + p.r + 16 && Math.abs(p.y - CAKE.y) < CAKE.h / 2 + p.r + 16) {
+    const d = carrying;
+    placed[d] = true; carrying = null;
+    sfx('place');
+    burst(slotX(d), CAKE_BASE - 140, ['#fff', '#ffd93d', DIGIT_COL[d]], 24);
+    if (placed[1] && placed[2]) {
+      state = 'winning'; winT = 0; lightPhase = 'on';
+      say('As duas velas estão no bolo! 🎉', 5);
+      setTimeout(() => sfx('win'), 350);
+    } else {
+      say(`Vela ${d} no bolo! Agora falta a vela ${d === 1 ? 2 : 1}!`, 3);
+    }
+  }
+
+  // toons (Dandy's World vibe)
+  for (const o of toons) {
+    const d = dist(o, p);
+    let tx, ty, sp = o.sp * 0.55;
+    if (d < 230 && p.inv <= 0) { tx = p.x; ty = p.y; sp = o.sp; }
+    else {
+      o.wt -= dt;
+      if (o.wt <= 0 || !o.tgt) { o.tgt = { x: rand(AREA.x0, AREA.x1), y: rand(AREA.y0, AREA.y1) }; o.wt = rand(2, 4); }
+      tx = o.tgt.x; ty = o.tgt.y;
+    }
+    const a = Math.atan2(ty - o.y, tx - o.x);
+    if (Math.hypot(tx - o.x, ty - o.y) > 4) { o.x += Math.cos(a) * sp * dt; o.y += Math.sin(a) * sp * dt; }
+    clampArea(o); pushOutCake(o);
+    if (d < o.r + p.r - 2 && p.inv <= 0) hitPlayer(o, 'toon');
+  }
+  // keep toons apart
+  for (let i = 0; i < toons.length; i++) for (let j = i + 1; j < toons.length; j++) {
+    const a = toons[i], b = toons[j], d = dist(a, b);
+    if (d < 40 && d > 0) { const k = (40 - d) / 2 / d; a.x -= (b.x - a.x) * k; a.y -= (b.y - a.y) * k; b.x += (b.x - a.x) * k; b.y += (b.y - a.y) * k; }
+  }
+
+  // animatronic (FNAF vibe): moves only in the dark
+  bot.moving = lightPhase === 'off' && p.inv <= 0;
+  if (bot.moving) {
+    const a = Math.atan2(p.y - bot.y, p.x - bot.x);
+    bot.x += Math.cos(a) * 170 * dt; bot.y += Math.sin(a) * 170 * dt;
+    clampArea(bot); pushOutCake(bot);
+  }
+  if (lightPhase !== 'on' && dist(bot, p) < bot.r + p.r && p.inv <= 0) hitPlayer(bot, 'bot');
+}
+
+function updateFx(dt) {
+  t += dt;
+  msgT = Math.max(0, msgT - dt);
+  shake = Math.max(0, shake - dt);
+  glitch = Math.max(0, glitch - dt);
+  flash = Math.max(0, flash - dt);
+  booT = Math.max(0, booT - dt);
+  for (const q of particles) { q.vy += q.grav * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt; }
+  particles = particles.filter(q => q.life > 0);
+  if (state === 'winning') {
+    winT += dt;
+    confettiRain();
+    if (winT > 1.6 && !winShown) { winShown = true; document.getElementById('win').classList.remove('hidden'); }
+  }
+}
+
+// ---------- drawing ----------
+function slotX(d) { return CAKE.x + (d === 1 ? -22 : 22); }
+
+function drawFlame(x, y, s = 1) {
+  const fl = Math.sin(t * 20 + x) * 1.5;
+  ctx.fillStyle = 'rgba(255,200,60,.35)'; circle(x, y, 12 * s);
+  ctx.fillStyle = '#ff9f1a';
+  ctx.beginPath(); ctx.moveTo(x, y - 12 * s + fl); ctx.quadraticCurveTo(x + 7 * s, y, x, y + 5 * s); ctx.quadraticCurveTo(x - 7 * s, y, x, y - 12 * s + fl); ctx.fill();
+  ctx.fillStyle = '#fff3a0'; ellipse(x, y + 1 * s, 2.5 * s, 4 * s);
+}
+
+function drawDigitCandle(x, yBottom, d, size, lit, alpha = 1) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.font = `700 ${size}px Fredoka, system-ui, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = size * 0.17; ctx.strokeStyle = '#2a1a4a'; ctx.strokeText(String(d), x, yBottom);
+  ctx.lineWidth = size * 0.08; ctx.strokeStyle = '#fff'; ctx.strokeText(String(d), x, yBottom);
+  ctx.fillStyle = DIGIT_COL[d]; ctx.fillText(String(d), x, yBottom);
+  const top = yBottom - size * 0.74;
+  ctx.fillStyle = '#3a2a2a'; ctx.fillRect(x - 1.5, top - 7, 3, 7);
+  if (lit) drawFlame(x, top - 13, size / 40);
+  ctx.restore();
+}
+
+function drawBackground() {
+  ctx.fillStyle = '#120a24'; ctx.fillRect(0, 0, W, H);
+  // blocky grass border (Minecraft / Roblox vibe)
+  const T = 32;
+  for (let y = 100; y < H; y += T) for (let x = 0; x < W; x += T) {
+    if (x >= FLOOR.x0 && x + T <= FLOOR.x1 && y >= FLOOR.y0 && y + T <= FLOOR.y1) continue;
+    ctx.fillStyle = '#8b5a2b'; ctx.fillRect(x, y, T, T);
+    ctx.fillStyle = '#5fbf3a'; ctx.fillRect(x, y, T, 9);
+    ctx.fillStyle = '#4aa52c'; ctx.fillRect(x + ((x * 7 + y) % 3) * 8, y + 9, 6, 5);
+    ctx.fillStyle = '#6e4420';
+    for (let k = 0; k < 3; k++) ctx.fillRect(x + ((x * 13 + y * 7 + k * 11) % 26), y + 14 + ((x + y * 3 + k * 9) % 14), 4, 4);
+    ctx.strokeStyle = 'rgba(0,0,0,.18)'; ctx.strokeRect(x + .5, y + .5, T - 1, T - 1);
+  }
+  // circus tent wall (Digital Circus vibe)
+  for (let x = 0, i = 0; x < W; x += 40, i++) { ctx.fillStyle = i % 2 ? '#e8457a' : '#fff1f6'; ctx.fillRect(x, 56, 40, 44); }
+  ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(0, 92, W, 8);
+  // checker floor
+  const S = 48;
+  for (let y = FLOOR.y0; y < FLOOR.y1; y += S) for (let x = FLOOR.x0; x < FLOOR.x1; x += S) {
+    ctx.fillStyle = ((x - FLOOR.x0) / S + (y - FLOOR.y0) / S) % 2 ? '#3b2580' : '#2b1a5c';
+    ctx.fillRect(x, y, Math.min(S, FLOOR.x1 - x), Math.min(S, FLOOR.y1 - y));
+  }
+  for (const d of floorDots) { ctx.fillStyle = d.c; ctx.globalAlpha = .5; ctx.fillRect(d.x, d.y, d.s, d.s); }
+  ctx.globalAlpha = 1;
+  // bunting
+  for (let x = 20, i = 0; x < W - 20; x += 36, i++) {
+    const sag = Math.sin((x / W) * Math.PI) * 10;
+    ctx.fillStyle = DIGIT_COL[i % 10];
+    ctx.beginPath(); ctx.moveTo(x, 100 + sag); ctx.lineTo(x + 30, 100 + sag); ctx.lineTo(x + 15, 122 + sag); ctx.fill();
+  }
+  // balloons in corners
+  const balloons = [[70, 120, '#ff6b6b'], [100, 112, '#ffd93d'], [900, 112, '#5ad1ff'], [930, 120, '#c39bff']];
+  for (const [bx, by, c] of balloons) {
+    const yy = by + Math.sin(t * 2 + bx) * 3;
+    ctx.strokeStyle = '#ddd'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(bx, yy + 18); ctx.lineTo(bx + 3, yy + 45); ctx.stroke();
+    ctx.fillStyle = c; ellipse(bx, yy, 14, 18);
+    ctx.fillStyle = 'rgba(255,255,255,.5)'; ellipse(bx - 5, yy - 6, 3, 5);
+  }
+}
+
+function drawCake() {
+  const cx = CAKE.x, base = CAKE_BASE;
+  ctx.fillStyle = 'rgba(0,0,0,.35)'; ellipse(cx, base + 6, 130, 20);
+  ctx.fillStyle = '#e9e4f5'; ellipse(cx, base, 122, 18);
+  ctx.fillStyle = '#c9c1df'; ellipse(cx, base + 3, 116, 12);
+  // bottom tier
+  ctx.fillStyle = '#e8679f'; rrect(cx - 102, base - 70, 204, 66, 6);
+  ctx.fillStyle = '#ff9ec7'; rrect(cx - 102, base - 72, 204, 60, 6);
+  ctx.fillStyle = '#fff'; ctx.fillRect(cx - 102, base - 72, 204, 10);
+  for (let x = cx - 96; x < cx + 100; x += 22) ellipse(x, base - 62, 7, 6 + (x % 3) * 2);
+  // top tier
+  ctx.fillStyle = '#9a6be0'; rrect(cx - 72, base - 124, 144, 54, 6);
+  ctx.fillStyle = '#c39bff'; rrect(cx - 72, base - 126, 144, 50, 6);
+  ctx.fillStyle = '#fff'; ctx.fillRect(cx - 72, base - 126, 144, 9);
+  for (let x = cx - 66; x < cx + 70; x += 20) ellipse(x, base - 117, 6, 5 + (x % 3) * 2);
+  // sprinkles
+  const spr = [[-88, -20], [-60, -14], [70, -22], [88, -12], [-50, -100], [55, -96]];
+  spr.forEach(([dx, dy], i) => { ctx.fillStyle = DIGIT_COL[(i * 3) % 10]; ctx.fillRect(cx + dx, base + dy, 6, 3); });
+  // writing
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = '700 20px Fredoka, system-ui, sans-serif';
+  ctx.fillStyle = '#7a1f4f'; ctx.fillText('Feliz Aniversário', cx, base - 34);
+  ctx.font = '700 20px Fredoka, system-ui, sans-serif';
+  ctx.fillStyle = '#fff'; ctx.lineWidth = 4; ctx.strokeStyle = '#6a3fb0';
+  ctx.strokeText('Luiza Lise', cx, base - 94); ctx.fillText('Luiza Lise', cx, base - 94);
+  // candle slots
+  const lit = state !== 'play';
+  for (const d of [1, 2]) {
+    if (placed[d]) drawDigitCandle(slotX(d), base - 124, d, 42, lit);
+    else drawDigitCandle(slotX(d), base - 124, d, 42, false, 0.22 + 0.1 * Math.sin(t * 4));
+  }
+}
+
+function drawPlayer() {
+  const p = player, x = p.x, y = p.y, f = p.face;
+  ctx.save();
+  if (p.inv > 0 && p.stun <= 0 && Math.floor(t * 12) % 2 === 0) ctx.globalAlpha = 0.45;
+  ctx.fillStyle = 'rgba(0,0,0,.3)'; ellipse(x, y + 2, 16, 6);
+  const sw = p.moving ? Math.sin(p.walk) * 4 : 0;
+  ctx.fillStyle = '#3b5bdb'; ctx.fillRect(x - 11, y - 18 + sw, 10, 18 - sw); ctx.fillRect(x + 1, y - 18 - sw, 10, 18 + sw);
+  ctx.fillStyle = '#ff6fa8'; ctx.fillRect(x - 14, y - 40, 28, 23);
+  ctx.fillStyle = '#ffd93d'; ctx.fillRect(x - 4, y - 34, 8, 8);
+  ctx.fillStyle = '#f2c29b'; ctx.fillRect(x - 20, y - 39 - sw / 2, 6, 19); ctx.fillRect(x + 14, y - 39 + sw / 2, 6, 19);
+  ctx.fillStyle = '#f2c29b'; ctx.fillRect(x - 14, y - 67, 28, 27);
+  ctx.fillStyle = '#6b3a1f'; ctx.fillRect(x - 15, y - 71, 30, 9); ctx.fillRect(x - 15, y - 66, 5, 22); ctx.fillRect(x + 10, y - 66, 5, 22);
+  ctx.fillStyle = '#ff4d8d'; ctx.fillRect(x + 6 * f, y - 74, 8, 6); // hair clip
+  ctx.fillStyle = '#222'; ctx.fillRect(x - 7 + f * 2, y - 57, 4, 5); ctx.fillRect(x + 3 + f * 2, y - 57, 4, 5);
+  ctx.fillStyle = '#c4405e'; ctx.fillRect(x - 3 + f * 2, y - 48, 7, 2);
+  if (p.stun > 0) for (let i = 0; i < 3; i++) {
+    const a = t * 6 + i * 2.09;
+    ctx.fillStyle = '#ffd93d'; ctx.font = '700 14px Fredoka, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('★', x + Math.cos(a) * 18, y - 80 + Math.sin(a) * 5);
+  }
+  ctx.restore();
+  if (carrying != null) drawDigitCandle(x + f * 24, y - 22, carrying, 30, false);
+}
+
+function drawToon(o) {
+  const bob = Math.abs(Math.sin(t * 9 + o.x * 0.02)) * 5;
+  const x = o.x, y = o.y;
+  ctx.fillStyle = 'rgba(0,0,0,.3)'; ellipse(x, y + 2, 17, 6);
+  ctx.save(); ctx.translate(x, y - 28 - bob);
+  let eyeY = -2;
+  if (o.kind === 'estrela') {
+    ctx.fillStyle = o.col; ctx.strokeStyle = o.dark; ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) { const r = i % 2 ? 12 : 27, a = -Math.PI / 2 + i * Math.PI / 5 + Math.sin(t * 3) * 0.08; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else if (o.kind === 'cupcake') {
+    ctx.fillStyle = o.col; ctx.beginPath(); ctx.moveTo(-17, 4); ctx.lineTo(17, 4); ctx.lineTo(12, 26); ctx.lineTo(-12, 26); ctx.fill();
+    ctx.strokeStyle = o.dark; ctx.lineWidth = 2; for (let i = -10; i <= 10; i += 7) { ctx.beginPath(); ctx.moveTo(i, 5); ctx.lineTo(i * 0.75, 25); ctx.stroke(); }
+    ctx.fillStyle = '#fff3f8'; circle(0, 0, 19); circle(-12, 4, 8); circle(12, 4, 8);
+    ctx.fillStyle = '#ff4d4d'; circle(0, -20, 5);
+    eyeY = -3;
+  } else {
+    ctx.strokeStyle = '#eee'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(0, 26); ctx.quadraticCurveTo(6, 36, 0, 28 + bob + 2); ctx.stroke();
+    ctx.fillStyle = o.col; ellipse(0, 0, 22, 26);
+    ctx.beginPath(); ctx.moveTo(-4, 26); ctx.lineTo(4, 26); ctx.lineTo(0, 20); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.45)'; ellipse(-9, -10, 4, 7);
+  }
+  const a = Math.atan2(player.y - o.y, player.x - o.x);
+  for (const ex of [-8, 8]) {
+    ctx.fillStyle = '#fff'; circle(ex, eyeY, 6);
+    ctx.fillStyle = '#1b1030'; circle(ex + Math.cos(a) * 2.5, eyeY + Math.sin(a) * 2.5, 3);
+  }
+  ctx.strokeStyle = '#1b1030'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, eyeY + 7, 6, 0.2, Math.PI - 0.2); ctx.stroke();
+  ctx.restore();
+}
+
+function drawBot(b) {
+  const tw = b.moving ? Math.sin(t * 35) * 2 : 0;
+  ctx.fillStyle = 'rgba(0,0,0,.35)'; ellipse(b.x, b.y + 2, 22, 7);
+  ctx.save(); ctx.translate(b.x + tw, b.y);
+  ctx.fillStyle = '#5b5f6e'; ctx.fillRect(-14, -14, 10, 14); ctx.fillRect(4, -14, 10, 14);
+  ctx.fillStyle = '#7a7f90'; ctx.fillRect(-29, -50, 8, 30); ctx.fillRect(21, -50, 8, 30);
+  ctx.fillStyle = '#8a8fa0'; rrect(-21, -54, 42, 42, 8);
+  ctx.fillStyle = '#a9adbb'; rrect(-13, -44, 26, 26, 6);
+  ctx.fillStyle = '#5b5f6e'; for (const [rx, ry] of [[-17, -50], [17, -50], [-17, -16], [17, -16]]) circle(rx, ry, 2);
+  ctx.fillStyle = '#e63946'; ctx.beginPath(); ctx.moveTo(0, -52); ctx.lineTo(-10, -58); ctx.lineTo(-10, -46); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(0, -52); ctx.lineTo(10, -58); ctx.lineTo(10, -46); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#9aa0b2'; circle(0, -76, 23);
+  ctx.fillStyle = '#6d7284'; ctx.fillRect(-15, -66 + (b.moving ? Math.abs(Math.sin(t * 12)) * 3 : 0), 30, 10);
+  ctx.fillStyle = '#fff'; for (let i = -12; i < 12; i += 6) ctx.fillRect(i, -66, 4, 4);
+  ctx.fillStyle = '#111'; circle(-8, -80, 6); circle(8, -80, 6);
+  ctx.fillStyle = lightPhase === 'on' ? '#ddd' : '#ffe14d'; circle(-8, -80, lightPhase === 'on' ? 1.6 : 3); circle(8, -80, lightPhase === 'on' ? 1.6 : 3);
+  ctx.fillStyle = '#ff4d6d'; ctx.beginPath(); ctx.moveTo(-13, -96); ctx.lineTo(13, -96); ctx.lineTo(0, -126); ctx.fill();
+  ctx.fillStyle = '#ffd93d'; ctx.fillRect(-8, -108, 16, 4); ctx.fillRect(-4, -118, 8, 3); circle(0, -127, 4);
+  ctx.restore();
+}
+
+function drawBotEyes() {
+  const x = bot.x, y = bot.y;
+  ctx.fillStyle = 'rgba(255,225,77,.25)'; circle(x - 8, y - 80, 9); circle(x + 8, y - 80, 9);
+  ctx.fillStyle = '#ffe14d'; circle(x - 8, y - 80, 3.5); circle(x + 8, y - 80, 3.5);
+}
+
+function drawCandleOnFloor(c) {
+  let x = c.x, y = c.y;
+  if (c.fly < 1 && c.from) {
+    const k = c.fly;
+    x = c.from.x + (c.x - c.from.x) * k;
+    y = c.from.y + (c.y - c.from.y) * k - Math.sin(k * Math.PI) * 120;
+  } else {
+    ctx.fillStyle = 'rgba(0,0,0,.3)'; ellipse(x, y + 2, 14, 5);
+    y += Math.sin(t * 3 + c.ph) * 3 - 3;
+  }
+  drawDigitCandle(x, y, c.d, 46, false);
+}
+
+function wrapLines(text, maxW) {
+  const words = text.split(' '); const lines = []; let line = '';
+  for (const w of words) { const test = line ? line + ' ' + w : w; if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = w; } else line = test; }
+  if (line) lines.push(line);
+  return lines.slice(0, 2);
+}
+
+function drawHUD() {
+  ctx.fillStyle = '#1b1036'; ctx.fillRect(0, 0, W, 56);
+  ctx.fillStyle = '#e8457a'; ctx.fillRect(0, 54, W, 2);
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+  ctx.font = '12px "Press Start 2P", monospace'; ctx.fillStyle = '#ffd93d';
+  ctx.fillText('VELAS', 16, 28);
+  [1, 2].forEach((d, i) => {
+    const bx = 100 + i * 52, by = 8;
+    const has = carrying === d, ok = placed[d];
+    ctx.fillStyle = ok ? '#2a8a3c' : has ? '#4a3585' : '#2b1d4f'; rrect(bx, by, 42, 40, 6);
+    if (has) { ctx.strokeStyle = '#ffd93d'; ctx.lineWidth = 2 + Math.sin(t * 8); ctx.strokeRect(bx + 1, by + 1, 40, 38); }
+    ctx.font = '700 28px Fredoka, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = ok || has ? DIGIT_COL[d] : '#6b5a99'; ctx.fillText(String(d), bx + 21, by + 21);
+    if (ok) { ctx.fillStyle = '#fff'; ctx.font = '700 16px Fredoka, sans-serif'; ctx.fillText('✓', bx + 35, by + 9); }
+  });
+  // host "Glitchinho"
+  const hx = 958 + (glitch > 0 ? rand(-4, 4) : 0), hy = 28 + Math.sin(t * 3) * 3;
+  ctx.fillStyle = `hsl(${(t * 80) % 360},80%,60%)`; rrect(hx - 17, hy - 17, 34, 34, 6);
+  ctx.fillStyle = '#fff'; ctx.fillRect(hx - 10, hy - 7, 7, 8); ctx.fillRect(hx + 3, hy - 7, 7, 8);
+  ctx.fillStyle = '#111'; ctx.fillRect(hx - 8, hy - 4, 3, 4); ctx.fillRect(hx + 5, hy - 4, 3, 4);
+  ctx.fillRect(hx - 6, hy + 6, 12, 3);
+  // message
+  let text = msgT > 0 ? msgText : (carrying != null ? `Leve a vela ${carrying} até o bolo!` : 'Procure as velas 1 e 2 pelo salão!');
+  ctx.font = '600 18px Fredoka, sans-serif'; ctx.textAlign = 'right';
+  const lines = wrapLines(text, 700);
+  ctx.fillStyle = '#fff';
+  lines.forEach((l, i) => ctx.fillText(l, 928, lines.length === 1 ? 28 : 18 + i * 21));
+}
+
+function drawJoystick() {
+  if (!joy) return;
+  const R = joyRadius();
+  ctx.fillStyle = 'rgba(255,255,255,.12)'; circle(joy.sx, joy.sy, R);
+  const dx = joy.x - joy.sx, dy = joy.y - joy.sy, m = Math.hypot(dx, dy), k = m > R ? R / m : 1;
+  ctx.fillStyle = 'rgba(255,255,255,.35)'; circle(joy.sx + dx * k, joy.sy + dy * k, R * 0.45);
+}
+
+function draw() {
+  ctx.setTransform(K, 0, 0, K, 0, 0);
+  if (shake > 0) ctx.translate(rand(-1, 1) * shake * 16, rand(-1, 1) * shake * 16);
+  drawBackground();
+
+  const ents = [];
+  for (const c of candles) ents.push({ y: c.y, f: () => drawCandleOnFloor(c) });
+  for (const o of toons) ents.push({ y: o.y, f: () => drawToon(o) });
+  ents.push({ y: bot.y, f: () => drawBot(bot) });
+  ents.push({ y: player.y, f: drawPlayer });
+  ents.push({ y: CAKE_BASE, f: drawCake });
+  ents.sort((a, b) => a.y - b.y).forEach(e => e.f());
+
+  // darkness
+  if (state === 'play' && lightPhase !== 'on') {
+    const a = lightPhase === 'off' ? 0.94 : (Math.sin(t * 38) > 0.1 ? 0.82 : 0.08);
+    const g = ctx.createRadialGradient(player.x, player.y - 30, 30, player.x, player.y - 30, 160);
+    g.addColorStop(0, 'rgba(6,0,18,0)'); g.addColorStop(1, `rgba(6,0,18,${a})`);
+    ctx.fillStyle = g; ctx.fillRect(-20, 56, W + 40, H);
+    if (lightPhase === 'off' || a > 0.5) drawBotEyes();
+  }
+
+  for (const q of particles) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, q.life / Math.min(q.max, 0.6)));
+    ctx.fillStyle = q.col; ctx.fillRect(q.x, q.y, q.size, q.size * (q.spin ? Math.abs(Math.sin(t * 6 + q.spin)) + 0.3 : 1));
+  }
+  ctx.globalAlpha = 1;
+
+  if (flash > 0) { ctx.fillStyle = `rgba(255,60,90,${flash})`; ctx.fillRect(-20, -20, W + 40, H + 40); }
+  if (booT > 0) {
+    ctx.save(); ctx.translate(W / 2, H / 2); const s = 1 + (0.8 - booT) * 0.6; ctx.scale(s, s);
+    ctx.font = '48px "Press Start 2P", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#111'; ctx.fillText('BUUU!', 4, 4); ctx.fillStyle = '#ffe14d'; ctx.fillText('BUUU!', 0, 0);
+    ctx.restore();
+  }
+
+  ctx.setTransform(K, 0, 0, K, 0, 0);
+  drawHUD();
+  drawJoystick();
+
+  // glitch slices (Digital Circus vibe)
+  if (glitch > 0) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    for (let i = 0; i < 6; i++) {
+      const sy = Math.floor(rand(0, cv.height)), sh = Math.floor(rand(4, 28) * K);
+      ctx.drawImage(cv, 0, sy, cv.width, sh, Math.floor(rand(-18, 18) * K), sy, cv.width, sh);
+    }
+    ctx.fillStyle = 'rgba(255,0,200,.12)'; ctx.fillRect(0, rand(0, cv.height), cv.width, 6 * K);
+    ctx.fillStyle = 'rgba(0,255,255,.12)'; ctx.fillRect(0, rand(0, cv.height), cv.width, 6 * K);
+  }
+}
+
+// ---------- loop ----------
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (state === 'play') updateGame(dt);
+  updateFx(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function start() {
+  audioOn();
+  reset();
+  state = 'play';
+  document.getElementById('start').classList.add('hidden');
+  document.getElementById('win').classList.add('hidden');
+}
+document.getElementById('play').addEventListener('click', start);
+document.getElementById('again').addEventListener('click', start);
+document.getElementById('mute').addEventListener('click', e => {
+  muted = !muted; e.currentTarget.textContent = muted ? '🔇' : '🔊'; audioOn();
+});
+
+reset();
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
